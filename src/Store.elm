@@ -1,17 +1,33 @@
 module Store exposing
-    ( Index
-    , Store
-    , System
-    , initConfig
-    , makeSystem
-    , withIndex
+    ( Store, System
+    , Index, initConfig, withIndex, makeSystem
     )
+
+{-| A simple store with support for secondary indexes.
+
+
+# Main types
+
+@docs Store, System
+
+
+# Indices Configuration
+
+@docs Index, initConfig, withIndex, makeSystem
+
+-}
 
 import Dict exposing (Dict)
 import Id exposing (Id)
 import IdDict exposing (IdDict)
 
 
+{-| A store. Basically like a `Dict (Id a) a` but that can be manipulated with
+the functions in `System` in order to support indices.
+
+This should appear in your model.
+
+-}
 type Store a
     = Store
         { data : IdDict a
@@ -41,6 +57,17 @@ configIndices (Config config) =
     config.indices
 
 
+{-| An index on stored values. For example if your store contains `MyValue` items, you could define
+your indices like this:
+
+    type alias MyIndices =
+        { name : Index MyValue
+        , anyArbitraryIndexName : Index MyValue
+        }
+
+The record constructor `MyIndices` would then be passed to `initConfig`.
+
+-}
 type Index a
     = Index (Id (IndexStore a))
 
@@ -82,6 +109,27 @@ idsRemove key (IndexStore d) =
     Dict.remove key d |> IndexStore
 
 
+{-| A set of functions to manipulate a `Store`.
+
+This should NOT be part of your model.
+
+You can generate one with `makeSystem`
+
+The available functions are :
+
+  - `initStore` : creates an empty store.
+  - `get` : gets an item by its Id.
+  - `create` : creates a new item in the store and returns its `Id`. Fails if the new item breaks
+    unicity constraints.
+  - `insert` : insert an item at a given `id`. Fails if the new item breaks
+    unicity constraints.
+  - `toList` : returns all items in a store as a list of `(id, item)`.
+  - `getBy` : gets an item by a secondary key.
+    Example : `system.getBy .lowerCaseName "john doe" store`
+  - `getIdBy` : gets an item's `Id` by a secondary key.
+  - `remove` : deletes an item from the store.
+
+-}
 type alias System a indices =
     { initStore : Store a
     , get : Id a -> Store a -> Maybe a
@@ -94,6 +142,14 @@ type alias System a indices =
     }
 
 
+{-| Makes a system from a given config.
+
+    Store.initConfig MyIndices
+        |> Store.withIndex .name
+        |> Store.withIndex (.age >> String.fromInt)
+        |> Store.makeSystem
+
+-}
 makeSystem : Config a indices -> System a indices
 makeSystem ((Config configData) as config) =
     { initStore = initStore config
@@ -107,6 +163,12 @@ makeSystem ((Config configData) as config) =
     }
 
 
+{-| Creates a new system configuration.
+
+Typically `indices` should be a record constructor so that each index can be
+configured using `withIndex`.
+
+-}
 initConfig : indices -> Config a indices
 initConfig builder =
     { indices = builder
@@ -117,6 +179,17 @@ initConfig builder =
         |> Config
 
 
+{-| Configures an index on the stored items.
+
+This index adds a unicity constraint : no two items can have the same indexed key.
+
+Example :
+
+    -- Given `type alias MyIndices = { lowerCaseName : Index MyValue }`
+    initConfig MyIndices
+        |> withIndex (.lowerCaseName >> String.toLower)
+
+-}
 withIndex : (a -> String) -> Config a (Index a -> indices) -> Config a indices
 withIndex toKey config_ =
     let
@@ -217,16 +290,3 @@ remove : Id a -> Store a -> Store a
 remove id (Store store) =
     { store | data = IdDict.remove id store.data }
         |> Store
-
-
-
--- withIndex : (a -> String) -> (newIndices -> Index) -> Config a indices -> Config a newIndices
--- withIndex toKey index system =
---     Config
---         system.initStore
---         system.get
---         system.create
---         system.insert
---         system.remove
---         system.update
---         system.indices
