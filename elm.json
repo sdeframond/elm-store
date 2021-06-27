@@ -1,6 +1,6 @@
 {
     "type": "package",
-    "name": "sdeframond/elm-store",
+    "name": "sdeframond/store",
     "summary": "An experimental relational store un pure Elm.",
     "license": "MIT",
     "version": "0.0.1",
