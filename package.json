@@ -4,11 +4,18 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run gen-doctest && npx elm-test-rs",
+    "preview-doc": "npx elm-doc-preview -p 8439 .",
+    "gen-doctest": "npx elm-verify-examples",
+    "postinstall": "elm-tooling install"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "Samuel DE FRAMOND",
+  "license": "MIT",
   "dependencies": {
     "elm-tooling": "^1.3.0"
+  },
+  "devDependencies": {
+    "elm-doc-preview": "^5.0.5",
+    "elm-verify-examples": "^5.0.0"
   }
 }

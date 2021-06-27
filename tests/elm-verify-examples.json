@@ -1,0 +1,9 @@
+{
+    "root": "../src",
+    "tests": [
+        "Store",
+        "Id",
+        "IdDict",
+        "./README.md"
+    ]
+}
