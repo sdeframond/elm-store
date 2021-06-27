@@ -1,247 +1,232 @@
 module Store exposing
-    ( Store
-    , initStore
-    , initSystem
-    , withConstraint
+    ( Index
+    , Store
+    , System
+    , initConfig
+    , makeSystem
     , withIndex
-    , withUniqueIndex
     )
 
-import Dict exposing (Dict, insert)
-import PositiveInt exposing (PositiveInt)
-import Set exposing (Set)
+import Dict exposing (Dict)
+import Id exposing (Id)
+import IdDict exposing (IdDict)
 
 
 type Store a
     = Store
-        { data : Dict String a
-        , indices : Dict String (Dict String (Set String))
+        { data : IdDict a
         , nextId : Id a
+        , indices : IdDict (IndexStore a)
         }
 
 
-type Id a
-    = Id PositiveInt
-
-
-idToString : Id a -> String
-idToString (Id id) =
-    PositiveInt.toString id
-
-
-idNext : Id a -> Id a
-idNext (Id id) =
-    Id (PositiveInt.next id)
-
-
-initStore : Store a
-initStore =
-    Store
-        { data = Dict.empty
-        , indices = Dict.empty
-        , nextId = Id PositiveInt.one
+type Config a indices
+    = Config
+        { indices : indices
+        , insert : Id a -> a -> Store a -> Maybe (Store a)
+        , nextIndexId : Id (IndexStore a)
+        , remove : Id a -> Store a -> Store a
         }
 
 
-type alias System index a =
-    { get : Id a -> Store a -> Maybe a
-    , getListFromIndex : index -> String -> Store a -> List a
-    , getFromIndex : index -> String -> Store a -> Maybe a
+nextIndexId : Config a indices -> ( Config a indices, Id (IndexStore a) )
+nextIndexId (Config config) =
+    ( Config { config | nextIndexId = Id.next config.nextIndexId }
+    , config.nextIndexId
+    )
+
+
+configIndices : Config a indices -> indices
+configIndices (Config config) =
+    config.indices
+
+
+type Index a
+    = Index (Id (IndexStore a))
+
+
+type IndexStore a
+    = IndexStore (Dict String (Id a))
+
+
+idsEmpty : IndexStore a
+idsEmpty =
+    IndexStore Dict.empty
+
+
+idsGet : String -> IndexStore a -> Maybe (Id a)
+idsGet key (IndexStore d) =
+    Dict.get key d
+
+
+idsInsert : String -> Id a -> IndexStore a -> Maybe (IndexStore a)
+idsInsert key id ids =
+    let
+        insert_ (IndexStore d) =
+            IndexStore (Dict.insert key id d)
+    in
+    case idsGet key ids of
+        Just existingId ->
+            if id == existingId then
+                Just ids
+
+            else
+                Nothing
+
+        Nothing ->
+            Just (insert_ ids)
+
+
+idsRemove : String -> IndexStore a -> IndexStore a
+idsRemove key (IndexStore d) =
+    Dict.remove key d |> IndexStore
+
+
+type alias System a indices =
+    { initStore : Store a
+    , get : Id a -> Store a -> Maybe a
     , create : a -> Store a -> Maybe ( Id a, Store a )
     , insert : Id a -> a -> Store a -> Maybe (Store a)
+    , toList : Store a -> List ( Id a, a )
+    , getBy : (indices -> Index a) -> String -> Store a -> Maybe a
+    , getIdBy : (indices -> Index a) -> String -> Store a -> Maybe (Id a)
     , remove : Id a -> Store a -> Store a
-    , update : Id a -> (Maybe a -> Maybe a) -> Store a -> Maybe (Store a)
-    , toString : index -> String
     }
 
 
-initSystem : (index -> String) -> System index a
-initSystem toString =
-    System
-        get
-        (getListFromIndex toString)
-        (getFromIndex toString)
-        (create insert)
-        insert
-        remove
-        (update get remove insert)
-        toString
-
-
-withIndex : index -> (a -> String) -> System index a -> System index a
-withIndex indexKey itemToString system =
-    let
-        insertInIndex id item maybeIndex =
-            maybeIndex
-                |> Maybe.map
-                    (Dict.update
-                        (itemToString item)
-                        (Maybe.map ((Set.insert <| idToString id) >> Just)
-                            >> Maybe.withDefault (Just <| Set.singleton (idToString id))
-                        )
-                        >> Just
-                    )
-                |> Maybe.withDefault
-                    (Dict.fromList [ ( itemToString item, Set.singleton <| idToString id ) ]
-                        |> Just
-                    )
-
-        insertInIndices id item (Store store) =
-            { store
-                | indices = Dict.update (system.toString indexKey) (insertInIndex id item) store.indices
-            }
-                |> Store
-                |> Just
-
-        removeFromSet id set =
-            let
-                removed =
-                    Set.remove (idToString id) set
-            in
-            if Set.isEmpty removed then
-                Nothing
-
-            else
-                Just removed
-
-        removeFromIndex id key maybeIndex =
-            maybeIndex
-                |> Maybe.map
-                    (Dict.update key (Maybe.andThen (removeFromSet id)))
-
-        removeFromIndices : Id a -> Store a -> Store a
-        removeFromIndices id (Store store) =
-            Store
-                { store
-                    | indices =
-                        system.get id (Store store)
-                            |> Maybe.map itemToString
-                            |> Maybe.map
-                                (\key ->
-                                    Dict.update (system.toString indexKey)
-                                        (removeFromIndex id key)
-                                        store.indices
-                                )
-                            |> Maybe.withDefault store.indices
-                }
-    in
-    beforeInsert insertInIndices system
-        |> beforeRemove removeFromIndices
-
-
-withUniqueIndex : index -> (a -> String) -> System index a -> System index a
-withUniqueIndex indexKey itemToString system =
-    let
-        isUnique item (Store store) =
-            Dict.get (system.toString indexKey) store.indices
-                |> Maybe.map (not << Dict.member (itemToString item))
-                |> Maybe.withDefault True
-    in
-    system
-        |> withIndex indexKey itemToString
-        |> withConstraint isUnique
-
-
-withConstraint : (a -> Store a -> Bool) -> System index a -> System index a
-withConstraint validate system =
-    let
-        check _ item store =
-            if validate item store then
-                Just store
-
-            else
-                Nothing
-    in
-    beforeInsert check system
-
-
-beforeInsert : (Id a -> a -> Store a -> Maybe (Store a)) -> System index a -> System index a
-beforeInsert before system =
-    let
-        insert_ id item store =
-            before id item store
-                |> Maybe.andThen (system.insert id item)
-    in
-    { system
-        | insert = insert_
-        , create = create insert_
-        , update = update system.get system.remove insert_
+makeSystem : Config a indices -> System a indices
+makeSystem ((Config configData) as config) =
+    { initStore = initStore config
+    , get = get
+    , create = create config
+    , insert = configData.insert
+    , toList = toList
+    , getBy = getBy (configIndices config)
+    , getIdBy = getIdBy (configIndices config)
+    , remove = configData.remove
     }
 
 
-beforeRemove : (Id a -> Store a -> Store a) -> System index a -> System index a
-beforeRemove before system =
+initConfig : indices -> Config a indices
+initConfig builder =
+    { indices = builder
+    , nextIndexId = Id.one
+    , insert = insert
+    , remove = remove
+    }
+        |> Config
+
+
+withIndex : (a -> String) -> Config a (Index a -> indices) -> Config a indices
+withIndex toKey config_ =
     let
+        ( Config config, indexId ) =
+            nextIndexId config_
+
+        getIndex key store =
+            IdDict.get key store.indices |> Maybe.withDefault idsEmpty
+
+        setIndex key ids store =
+            { store | indices = IdDict.insert key ids store.indices }
+
+        insert_ : Id a -> a -> Store a -> Maybe (Store a)
+        insert_ id item (Store store) =
+            getIndex indexId store
+                |> idsInsert (toKey item) id
+                |> Maybe.map (\ids -> setIndex indexId ids store)
+                |> Maybe.map Store
+                |> Maybe.andThen (config.insert id item)
+
         remove_ id store =
-            store
-                |> before id
-                |> system.remove id
+            get id store
+                |> Maybe.map (removeItemFromIndex store)
+                |> Maybe.withDefault store
+                |> config.remove id
+
+        removeItemFromIndex (Store store) item =
+            getIndex indexId store
+                |> idsRemove (toKey item)
+                |> (\ids -> setIndex indexId ids store)
+                |> Store
     in
-    { system
-        | remove = remove_
-        , update = update system.get remove_ system.insert
+    { indices = config.indices (Index indexId)
+    , insert = insert_
+    , nextIndexId = config.nextIndexId
+    , remove = remove_
     }
+        |> Config
+
+
+nextId : Store a -> ( Id a, Store a )
+nextId (Store store) =
+    { store | nextId = Id.next store.nextId }
+        |> Store
+        |> Tuple.pair store.nextId
+
+
+initStore : Config a indices -> Store a
+initStore (Config config) =
+    Store
+        { data = IdDict.empty
+        , nextId = Id.one
+        , indices = IdDict.empty
+        }
 
 
 get : Id a -> Store a -> Maybe a
-get id (Store { data }) =
-    Dict.get (idToString id) data
+get id (Store store) =
+    IdDict.get id store.data
 
 
-getIdsFromIndex : (index -> String) -> index -> String -> Store a -> List String
-getIdsFromIndex toString indexKey key (Store { indices }) =
-    Dict.get (toString indexKey) indices
-        |> Maybe.andThen (\index -> Dict.get key index)
-        |> Maybe.map Set.toList
-        |> Maybe.withDefault []
-
-
-getListFromIndex : (index -> String) -> index -> String -> Store a -> List a
-getListFromIndex toString indexKey key (Store store) =
-    getIdsFromIndex toString indexKey key (Store store)
-        |> List.filterMap (\id -> Dict.get id store.data)
-
-
-getFromIndex : (index -> String) -> index -> String -> Store a -> Maybe a
-getFromIndex toString indexKey key (Store store) =
-    getIdsFromIndex toString indexKey key (Store store)
-        |> List.head
-        |> Maybe.andThen (\id -> Dict.get id store.data)
-
-
-create : (Id a -> a -> Store a -> Maybe (Store a)) -> a -> Store a -> Maybe ( Id a, Store a )
-create insert_ item (Store store) =
-    insert_ store.nextId item (Store store)
-        |> Maybe.map (\(Store newStore) -> ( newStore.nextId, Store { newStore | nextId = idNext newStore.nextId } ))
+create : Config a indices -> a -> Store a -> Maybe ( Id a, Store a )
+create (Config config) item store =
+    let
+        ( id, nextIdStore ) =
+            nextId store
+    in
+    config.insert id item nextIdStore
+        |> Maybe.map (Tuple.pair id)
 
 
 insert : Id a -> a -> Store a -> Maybe (Store a)
 insert id item (Store store) =
-    { store | data = Dict.insert (idToString id) item store.data }
+    { store | data = IdDict.insert id item store.data }
         |> Store
         |> Just
 
 
+toList : Store a -> List ( Id a, a )
+toList (Store store) =
+    IdDict.toList store.data
+
+
+getBy : indices -> (indices -> Index a) -> String -> Store a -> Maybe a
+getBy indices getIndex key store =
+    getIdBy indices getIndex key store
+        |> Maybe.andThen (\id -> get id store)
+
+
+getIdBy : indices -> (indices -> Index a) -> String -> Store a -> Maybe (Id a)
+getIdBy indices getIndex key (Store store) =
+    getIndex indices
+        |> (\(Index idxId) -> IdDict.get idxId store.indices)
+        |> Maybe.andThen (idsGet key)
+
+
 remove : Id a -> Store a -> Store a
 remove id (Store store) =
-    { store
-        | data = Dict.remove (idToString id) store.data
-    }
+    { store | data = IdDict.remove id store.data }
         |> Store
 
 
-update :
-    (Id a -> Store a -> Maybe a)
-    -> (Id a -> Store a -> Store a)
-    -> (Id a -> a -> Store a -> Maybe (Store a))
-    -> Id a
-    -> (Maybe a -> Maybe a)
-    -> Store a
-    -> Maybe (Store a)
-update get_ remove_ insert_ id alter store =
-    case alter (get_ id store) of
-        Just item ->
-            store |> remove_ id |> insert_ id item
 
-        Nothing ->
-            Just (remove_ id store)
+-- withIndex : (a -> String) -> (newIndices -> Index) -> Config a indices -> Config a newIndices
+-- withIndex toKey index system =
+--     Config
+--         system.initStore
+--         system.get
+--         system.create
+--         system.insert
+--         system.remove
+--         system.update
+--         system.indices
