@@ -1,7 +1,7 @@
 {
     "type": "package",
     "name": "sdeframond/elm-store",
-    "summary": "An experimental indexed store un pure Elm.",
+    "summary": "An experimental indexed store in pure Elm.",
     "license": "MIT",
     "version": "1.0.0",
     "exposed-modules": [
